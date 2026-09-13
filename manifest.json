@@ -1,0 +1,58 @@
+{
+  "manifest_version": "0.2",
+  "name": "customer-health-mcp",
+  "display_name": "Customer Health",
+  "version": "0.1.0",
+  "description": "MCP server that synthesizes mock billing, support, and product usage data into B2B SaaS customer health and churn-risk insights.",
+  "long_description": "Answers customer-success questions like \"which accounts are at risk of churning?\" by synthesizing three data sources shaped like real B2B SaaS systems: Stripe-style billing/subscriptions, Zendesk/Intercom-style support tickets, and product-analytics-style usage. Includes a weighted, documented risk-scoring engine that explains its drivers rather than returning an opaque number. All data is deterministic synthetic data generated at startup - no external accounts or API keys required.",
+  "author": {
+    "name": "Tyler Brabo"
+  },
+  "license": "MIT",
+  "keywords": [
+    "customer-health",
+    "churn-risk",
+    "customer-success",
+    "b2b-saas",
+    "mcp"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/dist/index.js"
+      ],
+      "env": {}
+    }
+  },
+  "tools": [
+    {
+      "name": "list_accounts",
+      "description": "List all customer accounts with plan, MRR, payment status, and computed churn-risk band. Supports optional filtering by plan and payment status."
+    },
+    {
+      "name": "get_account_details",
+      "description": "Fetch the complete raw record for one account: billing/subscription record, 90-day usage time series and feature adoption, and full support ticket history."
+    },
+    {
+      "name": "list_at_risk_accounts",
+      "description": "List accounts whose churn-risk band is at or above a minimum threshold, sorted by risk score descending."
+    },
+    {
+      "name": "get_account_risk_summary",
+      "description": "Compute an account's churn-risk score and band, list the specific drivers behind the number, and generate a human-readable summary."
+    }
+  ],
+  "compatibility": {
+    "platforms": [
+      "linux",
+      "darwin",
+      "win32"
+    ],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  }
+}
