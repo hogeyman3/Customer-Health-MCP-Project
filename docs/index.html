@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="A build log for an MCP server that synthesizes billing, support, and usage data into an explainable customer churn-risk score.">
+<title>Building Customer Health MCP</title>
+<style>
+  :root {
+    --bg: #f2f5f5;
+    --surface: #ffffff;
+    --surface-sunk: #e9eeee;
+    --ink: #132226;
+    --ink-muted: #4c6165;
+    --ink-faint: #7c9296;
+    --line: #d6dedf;
+    --accent: #0e7a86;
+    --accent-ink: #075c66;
+    --accent-soft: #e0f0f0;
+    --code-bg: #0f2224;
+    --code-ink: #d9ecec;
+    --code-accent: #7fd6d0;
+    --risk-healthy: #2f8a5b;
+    --risk-watch: #a9741a;
+    --risk-atrisk: #b8452f;
+    --shadow: 0 1px 2px rgba(15, 34, 36, 0.06), 0 8px 24px -12px rgba(15, 34, 36, 0.18);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d1416;
+      --surface: #131d1f;
+      --surface-sunk: #0e1719;
+      --ink: #e6eeee;
+      --ink-muted: #9db1b3;
+      --ink-faint: #6f8688;
+      --line: #253335;
+      --accent: #59c9c4;
+      --accent-ink: #8fdedb;
+      --accent-soft: #10292a;
+      --code-bg: #081415;
+      --code-ink: #d3ebe9;
+      --code-accent: #7fe0da;
+      --risk-healthy: #57b980;
+      --risk-watch: #d9a13d;
+      --risk-atrisk: #e2705a;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 28px -14px rgba(0, 0, 0, 0.55);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0d1416;
+    --surface: #131d1f;
+    --surface-sunk: #0e1719;
+    --ink: #e6eeee;
+    --ink-muted: #9db1b3;
+    --ink-faint: #6f8688;
+    --line: #253335;
+    --accent: #59c9c4;
+    --accent-ink: #8fdedb;
+    --accent-soft: #10292a;
+    --code-bg: #081415;
+    --code-ink: #d3ebe9;
+    --code-accent: #7fe0da;
+    --risk-healthy: #57b980;
+    --risk-watch: #d9a13d;
+    --risk-atrisk: #e2705a;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 28px -14px rgba(0, 0, 0, 0.55);
+  }
+
+  * { box-sizing: border-box; }
+
+  html { color-scheme: light dark; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  img { max-width: 100%; }
+
+  ::selection { background: var(--accent-soft); color: var(--accent-ink); }
+
+  h1, h2, h3 {
+    font-family: "Newsreader", Georgia, "Times New Roman", serif;
+    font-weight: 500;
+    text-wrap: balance;
+    color: var(--ink);
+    margin: 0;
+  }
+
+  em { font-style: italic; color: var(--accent-ink); }
+
+  code, .mono {
+    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Consolas, monospace;
+  }
+
+  a { color: var(--accent-ink); }
+  a:focus-visible, button:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .page {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 clamp(1.25rem, 4vw, 3rem);
+    display: grid;
+    grid-template-columns: 200px minmax(0, 1fr);
+    gap: clamp(1.5rem, 4vw, 3.5rem);
+  }
+
+  /* ---------- side TOC ---------- */
+  .toc {
+    position: sticky;
+    top: 3rem;
+    align-self: start;
+    padding-top: 5.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+  .toc a {
+    font-size: 0.78rem;
+    text-decoration: none;
+    color: var(--ink-faint);
+    letter-spacing: 0.02em;
+    border-left: 2px solid transparent;
+    padding-left: 0.75rem;
+    transition: color 0.15s ease, border-color 0.15s ease;
+  }
+  .toc a:hover { color: var(--accent-ink); border-color: var(--accent); }
+  .toc .toc-num { font-family: "IBM Plex Mono", monospace; color: var(--ink-faint); margin-right: 0.4em; }
+
+  @media (max-width: 900px) {
+    .page { grid-template-columns: 1fr; }
+    .toc { display: none; }
+  }
+
+  main { min-width: 0; padding-bottom: 6rem; }
+
+  /* ---------- masthead ---------- */
+  .masthead {
+    padding: clamp(3rem, 8vw, 5rem) 0 3rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    display: flex;
+    align-items: center;
+    gap: 0.6em;
+    margin-bottom: 1.1rem;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 1.6em;
+    height: 1px;
+    background: var(--accent);
+    display: inline-block;
+  }
+  .masthead h1 {
+    font-size: clamp(2.4rem, 5.5vw, 3.6rem);
+    letter-spacing: -0.01em;
+    line-height: 1.05;
+  }
+  .masthead .dek {
+    margin-top: 1.15rem;
+    max-width: 46ch;
+    font-size: 1.14rem;
+    color: var(--ink-muted);
+  }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.75rem; }
+  .chip {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.02em;
+    padding: 0.32em 0.7em;
+    border-radius: 3px;
+    border: 1px solid var(--line);
+    color: var(--ink-muted);
+    background: var(--surface);
+  }
+
+  .stat-strip {
+    margin-top: 2.5rem;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+  @media (max-width: 640px) { .stat-strip { grid-template-columns: repeat(2, 1fr); } }
+  .stat {
+    padding: 1.1rem 1.25rem;
+    border-right: 1px solid var(--line);
+  }
+  .stat:first-child { padding-left: 0; }
+  .stat:last-child { border-right: none; }
+  .stat .n {
+    font-family: "IBM Plex Mono", monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 1.7rem;
+    color: var(--ink);
+    display: block;
+  }
+  .stat .l {
+    font-size: 0.74rem;
+    color: var(--ink-faint);
+    letter-spacing: 0.02em;
+  }
+
+  /* ---------- sections ---------- */
+  section { padding: clamp(3rem, 7vw, 4.5rem) 0; border-bottom: 1px solid var(--line); }
+  section:last-of-type { border-bottom: none; }
+  section h2 {
+    font-size: clamp(1.5rem, 3vw, 1.9rem);
+    margin-bottom: 1.3rem;
+  }
+  .prose { max-width: 66ch; }
+  .prose p { margin: 0 0 1.05rem; color: var(--ink); }
+  .prose p:last-child { margin-bottom: 0; }
+  .prose-wide { max-width: 78ch; }
+  .lede { font-size: 1.08rem; color: var(--ink-muted); max-width: 60ch; }
+
+  /* ---------- lab note callouts ---------- */
+  .labnote {
+    margin: 1.75rem 0;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    padding: 1.15rem 1.35rem;
+    box-shadow: var(--shadow);
+    max-width: 78ch;
+  }
+  .labnote .lab-tag {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    display: block;
+    margin-bottom: 0.55rem;
+  }
+  .labnote p { margin: 0 0 0.6rem; font-size: 0.94rem; color: var(--ink-muted); }
+  .labnote p:last-child { margin-bottom: 0; }
+  .labnote strong { color: var(--ink); font-weight: 600; }
+
+  /* ---------- code blocks ---------- */
+  pre {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 6px;
+    padding: 1.1rem 1.25rem;
+    overflow-x: auto;
+    font-size: 0.82rem;
+    line-height: 1.65;
+    margin: 1.5rem 0;
+    max-width: 100%;
+  }
+  pre .k { color: var(--code-accent); }
+  pre .s { color: #d7c88f; }
+  pre .c { color: #6f8a89; font-style: italic; }
+
+  /* ---------- figures ---------- */
+  figure { margin: 2.25rem 0 1.25rem; }
+  figure svg { width: 100%; height: auto; display: block; }
+  figcaption {
+    margin-top: 0.85rem;
+    font-size: 0.85rem;
+    color: var(--ink-faint);
+    max-width: 62ch;
+  }
+
+  /* ---------- tables ---------- */
+  .table-wrap { overflow-x: auto; margin: 1.5rem 0; }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 0.88rem; }
+  th, td { text-align: left; padding: 0.65rem 1rem 0.65rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: "IBM Plex Mono", monospace; font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-faint); font-weight: 500; }
+  td.tool-name { font-family: "IBM Plex Mono", monospace; color: var(--accent-ink); white-space: nowrap; }
+  td { color: var(--ink-muted); }
+
+  .badge {
+    display: inline-block;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.03em;
+    padding: 0.18em 0.55em;
+    border-radius: 3px;
+  }
+  .badge.raw { background: var(--surface-sunk); color: var(--ink-muted); }
+  .badge.synth { background: var(--accent-soft); color: var(--accent-ink); }
+
+  /* ---------- risk pills ---------- */
+  .pill { display: inline-flex; align-items: center; gap: 0.4em; font-family: "IBM Plex Mono", monospace; font-size: 0.72rem; padding: 0.16em 0.6em 0.16em 0.45em; border-radius: 99px; }
+  .pill::before { content: ""; width: 0.5em; height: 0.5em; border-radius: 50%; background: currentColor; }
+  .pill.healthy { color: var(--risk-healthy); background: color-mix(in srgb, var(--risk-healthy) 14%, transparent); }
+  .pill.watch { color: var(--risk-watch); background: color-mix(in srgb, var(--risk-watch) 16%, transparent); }
+  .pill.atrisk { color: var(--risk-atrisk); background: color-mix(in srgb, var(--risk-atrisk) 16%, transparent); }
+
+  /* ---------- footer ---------- */
+  footer {
+    padding: 3rem 0 4rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    justify-content: space-between;
+    align-items: baseline;
+    color: var(--ink-faint);
+    font-size: 0.85rem;
+  }
+  footer .stack-list { font-family: "IBM Plex Mono", monospace; font-size: 0.78rem; color: var(--ink-muted); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;0,600;1,400;1,500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+</head>
+<body>
+
+<div class="page">
+  <nav class="toc" aria-label="Section navigation">
+    <a href="#why"><span class="toc-num">01</span>Why</a>
+    <a href="#how"><span class="toc-num">02</span>How it works</a>
+    <a href="#scoring"><span class="toc-num">03</span>Scoring the risk</a>
+    <a href="#tools"><span class="toc-num">04</span>Four tools, one resource</a>
+    <a href="#testing"><span class="toc-num">05</span>Proving it works</a>
+    <a href="#shipping"><span class="toc-num">06</span>Shipping it</a>
+    <a href="#stack"><span class="toc-num">07</span>Stack &amp; structure</a>
+  </nav>
+
+  <main>
+    <header class="masthead">
+      <div class="eyebrow">MCP server · build log</div>
+      <h1>Customer Health MCP</h1>
+      <p class="dek">A Model Context Protocol server that combines three separate SaaS tools
+        (billing, support, product usage) to answer one question none of them can answer alone:
+        <em>which accounts are actually at risk, and why?</em></p>
+
+      <div class="chips">
+        <span class="chip">TypeScript</span>
+        <span class="chip">@modelcontextprotocol/sdk</span>
+        <span class="chip">zod</span>
+        <span class="chip">vitest</span>
+        <span class="chip">stdio transport</span>
+        <span class="chip">seeded PRNG</span>
+      </div>
+
+      <div class="stat-strip">
+        <div class="stat"><span class="n">32</span><span class="l">seeded accounts</span></div>
+        <div class="stat"><span class="n">4+1</span><span class="l">tools &amp; resource</span></div>
+        <div class="stat"><span class="n">9/9</span><span class="l">tests passing</span></div>
+        <div class="stat"><span class="n">0–100</span><span class="l">explainable score</span></div>
+      </div>
+    </header>
+
+    <section id="why">
+      <div class="eyebrow">01 · Why</div>
+      <h2>Nobody's watching all three at once</h2>
+      <div class="prose lede">
+        <p>Customer success teams sit at the intersection of billing, support, and product usage:
+          three systems that rarely talk to each other. An account can have healthy MRR and zero
+          open tickets while nobody's logged in for a month, and no single dashboard will catch
+          that. The signal only shows up once you look at all three together.</p>
+      </div>
+      <div class="prose prose-wide" style="margin-top:1.25rem">
+        <p><code>customer-health-mcp</code> is a portfolio project. I built it to work through that
+          synthesis problem as an actual MCP server, not just describe it in a slide. The data is
+          synthetic and deterministic (no API keys, no database, nothing real on the other end),
+          but I treated the tool design, input validation, structured output, and error handling
+          the same way I would for something headed to production. What follows is the build log:
+          the decisions I made, where I got them wrong the first time, and three bugs worth writing
+          down.</p>
+      </div>
+    </section>
+
+    <section id="how">
+      <div class="eyebrow">02 · How it works</div>
+      <h2>Where the data actually comes from</h2>
+      <div class="prose prose-wide">
+        <p>At startup, a seeded PRNG (<code>mulberry32</code>, seeded from a string via
+          <code>xmur3</code>) builds 32 fictional companies, entirely in memory. Each one carries
+          three sub-records shaped like the systems they're standing in for: a Stripe-style
+          <code>BillingRecord</code> (plan, MRR, payment status, downgrades), a support ticket list
+          styled after Intercom or Zendesk (severity, status, resolution time), and a 90-day
+          daily-usage series like you'd get from a product analytics tool, feature adoption
+          included. About 15–20% of accounts get pushed toward genuine risk on purpose, with usage
+          sliding, bills going unpaid, and tickets piling up, so there's actually something for the
+          tools to find.</p>
+        <p>Nothing gets cached. Every tool call recomputes its answer straight from that same
+          in-memory dataset, which matters because it means the risk score in section 03 can never
+          quietly drift out of sync with the raw data sitting one call away.</p>
+      </div>
+
+      <figure>
+        <svg viewBox="0 0 940 260" role="img" aria-label="Request flow: an MCP client connects over stdio JSON-RPC to the customer-health-mcp process, which generates accounts once at startup, holds them in memory, computes risk on demand, and returns shaped tool responses." xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor" />
+            </marker>
+          </defs>
+
+          <!-- client box -->
+          <rect x="8" y="92" width="150" height="76" rx="6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <text x="83" y="123" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" fill="currentColor">MCP Client</text>
+          <text x="83" y="141" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor" opacity="0.65">(Claude)</text>
+
+          <!-- connecting arrow client <-> server -->
+          <line x1="158" y1="130" x2="206" y2="130" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+          <text x="182" y="122" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity="0.75">stdio</text>
+
+          <!-- server outer boundary -->
+          <rect x="206" y="30" width="726" height="200" rx="8" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="3 4" opacity="0.5"/>
+          <text x="226" y="52" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor" opacity="0.6" letter-spacing="0.06em">CUSTOMER-HEALTH-MCP PROCESS</text>
+
+          <!-- stage 1: generator -->
+          <rect x="240" y="92" width="150" height="76" rx="6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <text x="315" y="123" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" fill="currentColor">generator.ts</text>
+          <text x="315" y="141" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor" opacity="0.65">runs once, at boot</text>
+
+          <line x1="390" y1="130" x2="428" y2="130" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrow)"/>
+
+          <!-- stage 2: accounts store -->
+          <rect x="428" y="92" width="150" height="76" rx="6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <text x="503" y="123" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" fill="currentColor">32 accounts</text>
+          <text x="503" y="141" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor" opacity="0.65">held in memory</text>
+
+          <line x1="578" y1="130" x2="616" y2="130" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrow)"/>
+
+          <!-- stage 3: scorer -->
+          <rect x="616" y="92" width="150" height="76" rx="6" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
+          <text x="691" y="123" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" fill="var(--accent)">riskScore.ts</text>
+          <text x="691" y="141" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--accent)" opacity="0.8">never cached</text>
+
+          <line x1="766" y1="130" x2="804" y2="130" stroke="currentColor" stroke-width="1.4" marker-end="url(#arrow)"/>
+
+          <!-- stage 4: tools -->
+          <rect x="804" y="92" width="112" height="76" rx="6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <text x="860" y="123" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" fill="currentColor">tools/</text>
+          <text x="860" y="141" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity="0.65">shape reply</text>
+        </svg>
+        <figcaption>The generator runs once at startup; every tool call re-runs the scorer fresh
+          against the same in-memory accounts, so a risk summary can never disagree with the raw
+          record one tool call away.</figcaption>
+      </figure>
+
+      <div class="labnote">
+        <span class="lab-tag">Lab note: the login signal that always read "today"</span>
+        <p><strong>Bug:</strong> <code>lastLoginDaysAgo</code> was derived by scanning the 90-day
+          usage series for the first day with any activity, but the series is stored oldest-first,
+          so scanning front-to-back returned the oldest active day, not the most recent one. Every
+          account read as <code>89</code> days since login.</p>
+        <p><strong>Fix #1:</strong> scan from the most recent day backwards instead.</p>
+        <p><strong>Fix #2, the one that mattered more:</strong> after correcting the direction,
+          every account read <code>0</code> days since login instead, because the generator forced
+          "today's" value to always be non-zero. A declining account and a thriving one both looked
+          like someone had logged in that morning. The real fix was giving a share of struggling
+          accounts a genuine dormant tail: 5–45 consecutive days forced to zero activity, so "no one
+          has logged in" became something that could actually happen in the data, not just in the
+          field name.</p>
+      </div>
+    </section>
+
+    <section id="scoring">
+      <div class="eyebrow">03 · Scoring the risk</div>
+      <h2>How the score gets built</h2>
+      <div class="prose prose-wide">
+        <p><code>computeRiskScore()</code> returns a number from 0 (no risk) to 100 (high risk),
+          built from four categories that are each capped independently, plus a plain-language
+          <code>drivers</code> list. That list is sorted by actual point contribution, not by
+          category order, so whatever's driving the score the most always shows up first.</p>
+      </div>
+
+      <figure>
+        <svg viewBox="0 0 900 260" role="img" aria-label="Bar chart of the four scoring categories' maximum point contribution on a 0 to 100 scale: usage 30, adoption 20, support 25, billing 70, with reference lines at the watch threshold of 30 and the at-risk threshold of 60. Billing alone reaches past-due at 32 points and canceled at 60 points, crossing both thresholds by itself; no other category can cross either threshold alone." xmlns="http://www.w3.org/2000/svg">
+          <!-- axis: x=140 maps to score 0, x=820 maps to score 100 -->
+          <!-- scale: 6.8px per point -->
+          <line x1="140" y1="26" x2="140" y2="220" stroke="currentColor" stroke-width="1" opacity="0.35"/>
+
+          <!-- threshold indicators: short ticks above the bars, not full-height lines through them -->
+          <line x1="344" y1="16" x2="344" y2="30" stroke="var(--risk-watch)" stroke-width="1.6"/>
+          <text x="344" y="12" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--risk-watch)">watch ≥30</text>
+
+          <line x1="548" y1="16" x2="548" y2="30" stroke="var(--risk-atrisk)" stroke-width="1.6"/>
+          <text x="548" y="12" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--risk-atrisk)">at_risk ≥60</text>
+
+          <!-- Usage bar: max 30 -->
+          <text x="132" y="48" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="12" fill="currentColor">Usage</text>
+          <rect x="140" y="34" width="204" height="24" rx="3" fill="var(--accent)"/>
+          <text x="352" y="51" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor" opacity="0.7">30 pts max</text>
+
+          <!-- Adoption bar: max 20 -->
+          <text x="132" y="98" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="12" fill="currentColor">Adoption</text>
+          <rect x="140" y="84" width="136" height="24" rx="3" fill="var(--accent)"/>
+          <text x="284" y="101" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor" opacity="0.7">20 pts max</text>
+
+          <!-- Support bar: max 25 -->
+          <text x="132" y="148" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="12" fill="currentColor">Support</text>
+          <rect x="140" y="134" width="170" height="24" rx="3" fill="var(--accent)"/>
+          <text x="318" y="151" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor" opacity="0.7">25 pts max</text>
+
+          <!-- Billing bar: max 70, segmented at 32 (past due) and 60 (canceled) -->
+          <text x="132" y="198" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="12" fill="currentColor">Billing</text>
+          <rect x="140" y="184" width="476" height="24" rx="3" fill="var(--accent)"/>
+          <line x1="358" y1="184" x2="358" y2="208" stroke="var(--bg)" stroke-width="2"/>
+          <line x1="548" y1="184" x2="548" y2="208" stroke="var(--bg)" stroke-width="2"/>
+          <text x="358" y="228" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity="0.7">past due: 32</text>
+          <text x="548" y="228" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity="0.7">canceled: 60</text>
+          <text x="582" y="176" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity="0.6">+10 downgrade</text>
+        </svg>
+        <figcaption>Billing is the only category where a real-world trigger (past due, canceled)
+          can cross the watch or at_risk line on its own. That's on purpose: a billing failure is a
+          harder churn signal than a soft dip in usage or a handful of open tickets.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Category</th><th>Signal</th><th>Max pts</th></tr></thead>
+          <tbody>
+            <tr><td>Usage</td><td>30-day usage decline (trend) + days since last login (dormancy)</td><td>18 + 12</td></tr>
+            <tr><td>Adoption</td><td>active seats ÷ licensed seats: full points at 0%, none at 60%+</td><td>20</td></tr>
+            <tr><td>Support</td><td>open high/critical tickets, tickets-per-seat volume, resolution time</td><td>12 + 8 + 5</td></tr>
+            <tr><td>Billing</td><td>canceled (60) or past due (32) payment status, plus a recent downgrade (+10)</td><td>70</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div style="display:flex; gap:1.5rem; flex-wrap:wrap; align-items:center; margin:0.5rem 0 0.5rem;">
+        <span class="pill healthy">healthy · 0–29</span>
+        <span class="pill watch">watch · 30–59</span>
+        <span class="pill atrisk">at_risk · 60–100</span>
+      </div>
+
+      <div class="labnote">
+        <span class="lab-tag">Lab note: a canceled account that scored "healthy"</span>
+        <p><strong>Bug:</strong> the first weighting pass capped billing at 25 points
+          (<code>past_due: 18, canceled: 25</code>). A unit test asserting that a past-due,
+          recently-downgraded account should not read as healthy <em>failed</em>: 18 + 7 = 25
+          points, five short of even the 30-point <code>watch</code> line. A fully canceled
+          subscription couldn't clear <code>watch</code> either, let alone <code>at_risk</code>.</p>
+        <p><strong>Fix:</strong> rebalanced billing on purpose to be the highest-leverage category
+          (<code>canceled: 60</code>, <code>past_due: 32</code>, <code>downgrade: +10</code>, cap
+          raised to 70), so the two clearest real-world churn signals could actually stand on their
+          own. My code comments had already claimed that was the design intent before the numbers
+          backed it up.</p>
+      </div>
+    </section>
+
+    <section id="tools">
+      <div class="eyebrow">04 · Four tools, one resource</div>
+      <h2>Four tools, split two ways</h2>
+      <div class="prose prose-wide">
+        <p>Three of the four tools stay close to the underlying data: they filter, sort, and
+          reshape, but they don't interpret anything. The fourth is the synthesis tool, the only
+          one that pulls all three data sources into a single judgment call. Keeping them separate
+          means a model (or a person reading its answer) can always go check a risk summary
+          against the raw ticket history or usage series for that account. The scoring stays
+          auditable instead of being the only thing you get to see.</p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Tool / resource</th><th>Kind</th><th>What it returns</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="tool-name">list_accounts</td>
+              <td><span class="badge raw">raw</span></td>
+              <td>Every account's plan, MRR, payment status, and risk band, filterable by plan and payment status.</td>
+            </tr>
+            <tr>
+              <td class="tool-name">get_account_details</td>
+              <td><span class="badge raw">raw</span></td>
+              <td>One account's full billing record, 90-day usage series, and ticket history, returned exactly as stored.</td>
+            </tr>
+            <tr>
+              <td class="tool-name">list_at_risk_accounts</td>
+              <td><span class="badge raw">raw</span></td>
+              <td>Accounts at or above a minimum risk band, sorted by score descending.</td>
+            </tr>
+            <tr>
+              <td class="tool-name">get_account_risk_summary</td>
+              <td><span class="badge synth">synthesis</span></td>
+              <td>Score, band, ranked drivers, and a templated natural-language paragraph. The flagship tool.</td>
+            </tr>
+            <tr>
+              <td class="tool-name">methodology://risk-scoring</td>
+              <td><span class="badge synth">resource</span></td>
+              <td>The weights and thresholds above, rendered live from the same constants the scorer runs on, so it cannot drift out of sync with the code.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="prose prose-wide" style="margin-top:0.5rem">
+        <p>Here's an actual reply from <code>get_account_risk_summary</code>, for a seeded account
+          that's gone dark and stopped paying:</p>
+      </div>
+      <pre><span class="c">// get_account_risk_summary({ accountId: "acct_0014" })</span>
+{
+  <span class="k">"companyName"</span>: <span class="s">"Tidewater Insurance"</span>,
+  <span class="k">"riskBand"</span>: <span class="s">"at_risk"</span>,
+  <span class="k">"riskScore"</span>: 100,
+  <span class="k">"drivers"</span>: [
+    <span class="s">"Subscription has been canceled"</span>,
+    <span class="s">"Only 0% of licensed seats are active"</span>,
+    <span class="s">"Usage has dropped 100% over the last 30 days"</span>,
+    <span class="s">"No product login in 43 days"</span>
+  ],
+  <span class="k">"summary"</span>: <span class="s">"Tidewater Insurance is at meaningful risk of churning (risk score 100/100). Key factors: Subscription has been canceled; Only 0% of licensed seats are active; Usage has dropped 100% over the last 30 days."</span>
+}</pre>
+    </section>
+
+    <section id="testing">
+      <div class="eyebrow">05 · Proving it works</div>
+      <h2>Testing against a real client</h2>
+      <div class="prose prose-wide">
+        <p>Five unit tests hit <code>computeRiskScore</code> directly: a healthy account, one with
+          declining usage, one with a billing problem, a mixed-signal account, and an edge case
+          that maxes everything out to check the driver ordering. Four integration tests go
+          further and actually spin up <code>McpServer</code> and a real MCP <code>Client</code>,
+          connected over the SDK's <code>InMemoryTransport</code>, then drive them through genuine
+          JSON-RPC calls (<code>tools/list</code>, <code>resources/list</code>,
+          <code>tools/call</code>) instead of just invoking the handler functions directly. One of
+          those tests checks that a specific seeded account (<code>acct_0014</code>, canceled and
+          dark under the default seed) actually shows up in <code>list_at_risk_accounts</code> and
+          actually gets explained correctly by <code>get_account_risk_summary</code>, not just
+          that the response comes back in the right shape.</p>
+      </div>
+      <div class="stat-strip" style="margin-top:2rem; max-width:520px">
+        <div class="stat"><span class="n">5</span><span class="l">unit tests</span></div>
+        <div class="stat"><span class="n">4</span><span class="l">integration tests</span></div>
+        <div class="stat"><span class="n">9/9</span><span class="l">passing</span></div>
+        <div class="stat"><span class="n">0</span><span class="l">npm audit findings</span></div>
+      </div>
+    </section>
+
+    <section id="shipping">
+      <div class="eyebrow">06 · Shipping it</div>
+      <h2>Wiring it into Claude, twice</h2>
+      <div class="prose prose-wide">
+        <p>I wired the same stdio server into both of Claude's integration surfaces, since they're
+          built on entirely separate systems with no shared configuration between them. For
+          <strong>Claude Code</strong> (this CLI/agent surface), I registered it with
+          <code>claude mcp add</code>, which stores it in <code>~/.claude.json</code>. For
+          <strong>Claude Desktop's regular chat</strong>, I packaged it for the Connectors system
+          instead, built on Anthropic's MCPB format (MCP Bundle, formerly called DXT): a signed
+          <code>.mcpb</code> file installed straight through the app.</p>
+      </div>
+
+      <div class="labnote">
+        <span class="lab-tag">Lab note: it worked in one terminal and not another</span>
+        <p><strong>Bug:</strong> <code>claude mcp add customer-health -- node dist/index.js</code>
+          worked fine in the terminal it was run from, then quietly failed to connect from a fresh
+          one. The registered command was just <code>node</code>, and that only resolves in a shell
+          that's already sourced <code>nvm</code>'s init lines onto <code>PATH</code>. Different
+          terminals source different profiles, so whether Node happened to be on <code>PATH</code>
+          by the time <code>claude</code> started came down to luck.</p>
+        <p><strong>Fix:</strong> pointed the registration at the actual resolved binary
+          (<code>~/.nvm/versions/node/v20.20.2/bin/node</code>) instead of the bare command name.
+          Now it doesn't matter which shell launches it.</p>
+      </div>
+
+      <div class="prose prose-wide">
+        <p>Packaging for the Connectors surface used Anthropic's official <code>mcpb</code> CLI.
+          <code>mcpb pack</code> bundled up the project directory as-is, then <code>mcpb clean</code>
+          went back through and stripped out devDependencies, vitest and everything it drags in:</p>
+      </div>
+      <pre><span class="c">$ mcpb clean customer-health-mcp.mcpb</span>
+Removed development dependencies from node_modules
+Before: 30.7 MB
+After:  3.19 MB</pre>
+    </section>
+
+    <section id="stack">
+      <div class="eyebrow">07 · Stack &amp; structure</div>
+      <h2>What it's built from</h2>
+      <div class="prose prose-wide">
+        <p>TypeScript throughout, strict mode, ES2022/NodeNext modules.
+          <code>@modelcontextprotocol/sdk</code> handles the server and stdio transport, and every
+          tool has zod input/output schemas so a calling model gets typed
+          <code>structuredContent</code> back instead of text it has to re-parse.
+          <code>vitest</code> runs both the unit and integration tests. There's no database and no
+          external API. The whole dataset comes from one seed string, generated in memory, and
+          reproducible with a <code>--seed</code> flag on the CLI entrypoint.</p>
+      </div>
+      <pre>src/
+  data/       generator.ts, rng.ts, types.ts     <span class="c">// seeded synthetic dataset</span>
+  scoring/    riskScore.ts (+ tests)              <span class="c">// the weighted model above</span>
+  tools/      4 tools + shared accountId lookup
+  resources/  methodology.ts                      <span class="c">// self-documenting weights</span>
+  server.ts, index.ts                              <span class="c">// wiring + stdio entrypoint</span>
+tests/
+  integration.test.ts                              <span class="c">// real client, InMemoryTransport</span></pre>
+    </section>
+
+    <footer>
+      <span>Customer Health MCP, a portfolio project built end to end as an MCP server.</span>
+      <span class="stack-list">TypeScript · MCP SDK · zod · vitest</span>
+    </footer>
+  </main>
+</div>
+</body>
+</html>
